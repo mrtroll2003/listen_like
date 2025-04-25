@@ -19,11 +19,20 @@ class HomeController {
   bool requestTranslation = false; // Reactive translation toggle
   String selectedTargetLanguage = 'English'; // Default target language
 
-  // API Base URL (Replace with your actual Vercel deployment URL)
-  // IMPORTANT: Make sure it ends WITH a trailing slash if endpoint paths don't start with one
-  // OR make sure it ends WITHOUT a trailing slash if endpoint paths DO start with one.
-  // Consistency is key. Let's assume no trailing slash here and endpoints start with /api/.
-  final String _apiBaseUrl = "https://listen-like-api.onrender.com"; // <--- CHANGE THIS
+  static const String _apiBaseUrlEnvVar = 'API_BASE_URL';//env
+
+  
+  final String _apiBaseUrl = const String.fromEnvironment(
+    _apiBaseUrlEnvVar, // Variable name
+    defaultValue: 'http://localhost:10000', // Default for local testing (adjust port if needed)
+  ); 
+  HomeController() {
+    // Log the URL being used (optional debugging)
+    print("API Base URL Initialized: $_apiBaseUrl");
+    if (_apiBaseUrl == 'http://localhost:10000') {
+      print("WARNING: API Base URL is using default localhost. Ensure --dart-define=API_BASE_URL=... was used during build for deployment.");
+    }
+  }
 
   // Available languages for translation dropdown
   final List<String> targetLanguages = [
