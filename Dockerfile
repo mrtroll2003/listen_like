@@ -1,5 +1,5 @@
 # 1. Build Stage: Use official Flutter image to build the app
-FROM cirrusci/flutter:3.19.6 as builder
+FROM ghcr.io/cirruslabs/flutter:stable as builder
 
 WORKDIR /app
 
