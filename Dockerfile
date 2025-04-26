@@ -15,7 +15,7 @@ ARG API_URL
 
 # Build the web app, injecting the API URL
 # Using html renderer as example
-RUN flutter build web --web-renderer html --release --dart-define=API_BASE_URL=${API_URL}
+RUN flutter build web --release --dart-define=API_BASE_URL=${API_URL}
 
 
 # 2. Serve Stage: Use a lightweight web server image (like nginx)
