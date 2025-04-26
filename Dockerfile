@@ -11,11 +11,11 @@ RUN flutter pub get
 COPY . .
 
 # Define ARG for API URL (will be passed by Render Environment Variable)
-ARG API_URL="http://localhost:8080" # Default value for local build
+ARG API_URL
 
 # Build the web app, injecting the API URL
 # Using html renderer as example
-RUN flutter build web --web-renderer html --release --dart-define=API_BASE_URL=${https://listen-like-api.onrender.com/}
+RUN flutter build web --web-renderer html --release --dart-define=API_BASE_URL=${API_URL}
 
 
 # 2. Serve Stage: Use a lightweight web server image (like nginx)
