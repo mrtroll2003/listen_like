@@ -18,7 +18,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 class _HomeScreenState extends State<HomeScreen> {
-  final TextEditingController _linkController = TextEditingController();
+  //final TextEditingController _linkController = TextEditingController();
   late bool isLoading;
   @override
   void initState() {
@@ -27,6 +27,11 @@ class _HomeScreenState extends State<HomeScreen> {
       isLoading = false;
     });
   }
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
   void _updateState() {
     // If the widget is still mounted, rebuild the UI
     if (mounted) {
@@ -34,13 +39,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
   final HomeController _controller = HomeController();
-
-  
-
-Future<String?> _youtubeRedirect (String vidLink) async {
-  final yt = YoutubeExplode();
-  File? videoFile;
-}
 
   @override
   Widget build(BuildContext context) {
@@ -70,7 +68,7 @@ Future<String?> _youtubeRedirect (String vidLink) async {
                   icon: const Icon(Icons.video_file),
                   label: const Text('Pick Video'),
                   // Pass the callback to update state after picking
-                  onPressed: () => _controller.pickVideoFile(_updateState),
+                  onPressed: _controller.isLoading ? null : () => _controller.pickVideoFile(_updateState),
                   style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 15)),
                 ),
                 const SizedBox(height: 10),
@@ -81,6 +79,60 @@ Future<String?> _youtubeRedirect (String vidLink) async {
                   style: const TextStyle(fontStyle: FontStyle.italic),
                 ),
 
+                //YT link here
+                const SizedBox(height: 30),
+                const Divider(),
+                const SizedBox(height: 30),
+
+                // --- YouTube Link Section ---
+                 const Text(
+                  'Or Process YouTube Link',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  textAlign: TextAlign.center,
+                ),
+                 const SizedBox(height: 15),
+                 TextField(
+                   controller: _controller.youtubeUrlController,
+                   enabled: !_controller.isLoading, // Disable if loading
+                   decoration: const InputDecoration(
+                     labelText: 'YouTube Video URL',
+                     hintText: 'https://www.youtube.com/watch?v=...',
+                     border: OutlineInputBorder(),
+                     prefixIcon: Icon(Icons.link),
+                   ),
+                   keyboardType: TextInputType.url,
+                   onChanged: (_) => _updateState(), // Update UI maybe to enable button
+                   onTap: () { // Clear file selection when user interacts with URL field
+                     if (_controller.selectedFile != null) {
+                        setState(() {
+                           _controller.selectedFile = null;
+                        });
+                     }
+                   },
+                 ),
+                 const SizedBox(height: 15),
+                 // YouTube Processing Button & Loading Indicator
+                 if (_controller.isLoading)
+                   const Center(child: Padding(
+                     padding: EdgeInsets.symmetric(vertical: 15.0),
+                     child: CircularProgressIndicator(),
+                   ))
+                 else
+                   ElevatedButton.icon(
+                     icon: const Icon(Icons.play_circle_outline), // YouTube icon
+                     label: const Text('Process YouTube Link'),
+                     // Disable if URL is empty or loading is happening
+                     onPressed: _controller.youtubeUrlController.text.trim().isEmpty || _controller.isLoading
+                       ? null
+                       : () => _controller.processYouTubeLink(context, _updateState),
+                     style: ElevatedButton.styleFrom(
+                       padding: const EdgeInsets.symmetric(vertical: 15),
+                       backgroundColor: Colors.redAccent, // YouTube-ish color
+                       foregroundColor: Colors.white,
+                     ),
+                   ),
+
+
                 const SizedBox(height: 30),
                 const Divider(),
                 const SizedBox(height: 30),
@@ -89,6 +141,7 @@ Future<String?> _youtubeRedirect (String vidLink) async {
                  Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
+                    Text('Advanced options'),
                     const Text('Request Translation?'),
                     const SizedBox(width: 10),
                     // Use standard Switch bound to controller variable
@@ -137,7 +190,7 @@ Future<String?> _youtubeRedirect (String vidLink) async {
                     onPressed: _controller.selectedFile == null
                       ? null
                       // Pass context and callback to processVideo
-                      : () => _controller.processVideo(context, _updateState),
+                      : () => _controller.processVideoFile(context, _updateState),
                     style: ElevatedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 15),
                       backgroundColor: Colors.green,
