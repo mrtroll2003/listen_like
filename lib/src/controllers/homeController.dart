@@ -39,7 +39,7 @@ class HomeController {
   void dispose() {
     youtubeUrlController.dispose();
   }
-
+  final String _youtubeApiBaseUrl = "https://youtube-download-api-4bjr.onrender.com";
   // Available languages for translation dropdown
   final List<String> targetLanguages = [
     'English', 'Spanish', 'French', 'German', 'Japanese', 'Chinese', 'Korean', 'Vietnamese', 'Indonesian', 'Arabic', 'Hindi', 'Russian'
@@ -148,75 +148,148 @@ class HomeController {
   }
 
   Future<void> processYouTubeLink(BuildContext context, VoidCallback onStateChange) async {
-      final String url = youtubeUrlController.text.trim();
-      if (!_isValidYouTubeUrl(url)) {
-          errorMessage = "Please enter a valid YouTube video URL.";
+      String urlInput = youtubeUrlController.text.trim();
+      if (urlInput.isEmpty) {
+          errorMessage = "Please enter a valid URL.";
           onStateChange();
           return;
       }
 
+      // --- Improved Pre-Validation ---
+      // 1. Attempt to prepend https:// if no scheme exists
+      if (!urlInput.startsWith('http://') && !urlInput.startsWith('https://')) {
+          // Check if it LOOKS like a plausible domain start
+          if (urlInput.startsWith('www.youtube.com') ||
+              urlInput.startsWith('youtube.com') ||
+              urlInput.startsWith('m.youtube.com') ||
+              urlInput.startsWith('youtu.be')) {
+             print("Prepending https:// to URL: $urlInput");
+             urlInput = 'https://$urlInput'; // Default to https
+          } else {
+              // Doesn't start with http and doesn't look like a known domain start
+              errorMessage = "Invalid URL format. Please include http/https or use a standard YouTube link.";
+              onStateChange();
+              return;
+          }
+      }
+
+      // 2. Basic structural check using Uri (catches totally malformed URLs)
+      Uri? parsedUri;
+      try {
+          parsedUri = Uri.parse(urlInput);
+      } catch (e) {
+          print("URL parsing failed: $e");
+          errorMessage = "Invalid URL format.";
+          onStateChange();
+          return;
+      }
+
+      // 3. Check host and basic path/query for known patterns (similar to previous robust check)
+       final String host = parsedUri.host.toLowerCase();
+       bool looksLikeVideoLink = false;
+       if (host == 'youtu.be' && parsedUri.pathSegments.isNotEmpty) {
+           looksLikeVideoLink = true; // youtu.be/ID
+       } else if ((host == 'youtube.com' || host == 'www.youtube.com' || host == 'm.youtube.com')) {
+           if (parsedUri.path == '/watch' && parsedUri.queryParameters.containsKey('v')) {
+               looksLikeVideoLink = true; // youtube.com/watch?v=ID
+           } else if (parsedUri.pathSegments.isNotEmpty && parsedUri.pathSegments.first == 'embed' && parsedUri.pathSegments.length > 1) {
+               looksLikeVideoLink = true; // youtube.com/embed/ID
+           } else if (parsedUri.pathSegments.isNotEmpty && parsedUri.pathSegments.first == 'shorts' && parsedUri.pathSegments.length > 1) {
+               looksLikeVideoLink = true; // youtube.com/shorts/ID
+           }
+       }
+
+       if (!looksLikeVideoLink) {
+           errorMessage = "URL doesn't look like a valid YouTube Video, Short, or Embed link.";
+           onStateChange();
+           return;
+       }
+
+      // --- Validation Passed - Proceed with API call ---
+      final String finalUrlToProcess = urlInput; // Use the potentially modified URL
+
       isLoading = true;
       errorMessage = null;
-      selectedFile = null; // Clear file selection if processing URL
+      selectedFile = null;
       onStateChange();
 
       String? transcriptionResult;
       String? translationResult;
       String videoTitle = "YouTube Video"; // Default title
 
-      var yt = YoutubeExplode(); // Create instance
-
       try {
-          // --- Step 1: Download YouTube Audio ---
-          print("Downloading audio for YouTube URL: $url");
-          final video = await yt.videos.get(url);
-          videoTitle = video.title; // Get actual title
-
-          final manifest = await yt.videos.streamsClient.getManifest(video.id);
-          final audioStreamInfo = manifest.audioOnly.withHighestBitrate();
-          final stream = yt.videos.streamsClient.get(audioStreamInfo);
-
-          // Download stream to bytes
-          final bytesBuilder = BytesBuilder();
-          await for (final chunk in stream) {
-              bytesBuilder.add(chunk);
+          // --- Step 1: Get Video Info (Optional, for title) ---
+          String apiFilename = "youtube_audio.mp3"; // Default filename
+          try {
+              final infoUrl = Uri.parse('$_youtubeApiBaseUrl/info').replace(queryParameters: {'url': finalUrlToProcess});
+              print("Calling YouTube Info API: $infoUrl");
+              final infoResponse = await http.get(infoUrl).timeout(const Duration(seconds: 30));
+              if (infoResponse.statusCode == 200) {
+                  final infoData = jsonDecode(infoResponse.body);
+                  videoTitle = infoData['title'] ?? videoTitle;
+                  // Sanitize title slightly for filename
+                   final safeVideoTitle = videoTitle.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_');
+                  apiFilename = "$safeVideoTitle.mp3";
+                  print("Retrieved video title: $videoTitle");
+              } else {
+                  print("Warning: Failed to get video info (Status ${infoResponse.statusCode}). Using default title.");
+                  // Proceed without title, use default filename
+              }
+          } catch (e) {
+               print("Warning: Error getting video info: $e. Using default title.");
+               // Proceed without title
           }
-          final audioBytes = bytesBuilder.toBytes();
-          print("YouTube audio download complete (${audioBytes.length} bytes). Format: ${audioStreamInfo.container.name}");
-
-          // Generate a filename for the API
-          // Use a safe filename from title + container extension
-          final safeVideoTitle = videoTitle.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_'); // Basic sanitize
-          final apiFilename = "$safeVideoTitle.${audioStreamInfo.container.name}";
 
 
-          // --- Step 2: Transcribe ---
-          print("Starting transcription for YouTube audio...");
+          // --- Step 2: Download MP3 Audio Bytes from Node API ---
+          final downloadUrl = Uri.parse('$_youtubeApiBaseUrl/mp3').replace(queryParameters: {'url': finalUrlToProcess});
+          print("Calling YouTube MP3 Download API: $downloadUrl");
+
+          final audioResponse = await http.get(downloadUrl).timeout(const Duration(minutes: 5)); // Allow time for download
+
+          print("YouTube MP3 API Response Status: ${audioResponse.statusCode}");
+
+          if (audioResponse.statusCode != 200) {
+              // Try to get error message from Node API response body
+              String errorDetail = audioResponse.body.isNotEmpty ? audioResponse.body : "Failed to download audio";
+              throw Exception("YouTube Download API failed (Status ${audioResponse.statusCode}): $errorDetail");
+          }
+
+          final Uint8List audioBytes = audioResponse.bodyBytes;
+          if (audioBytes.isEmpty) {
+              throw Exception("YouTube Download API returned empty audio data.");
+          }
+          print("YouTube audio download complete (${audioBytes.length} bytes).");
+
+
+          // --- Step 3: Transcribe using MAIN Backend ---
+          print("Starting transcription for YouTube audio via Main API...");
+          // Use the _transcribeFile helper, passing the downloaded bytes and generated filename
           transcriptionResult = await _transcribeFile(
               audioBytes,
-              apiFilename, // Send downloaded audio with a filename
+              apiFilename, // Send downloaded audio with .mp3 filename
           );
           print("YouTube transcription successful.");
 
-          // --- Step 3: Translate (if requested) ---
+          // --- Step 4: Translate (if requested) using MAIN Backend ---
           if (requestTranslation) {
-              print("Starting translation for YouTube to ${selectedTargetLanguage}...");
-              translationResult = await _translateText(
+              print("Starting translation for YouTube to ${selectedTargetLanguage} via Main API...");
+              translationResult = await _translateText( // Uses main backend
                   transcriptionResult,
                   selectedTargetLanguage,
               );
               print("YouTube translation successful.");
           }
 
-          // --- Step 4: Navigate ---
+          // --- Step 5: Navigate ---
            print("Navigating to results screen (from YouTube)...");
            if (context.mounted) {
                Navigator.of(context).pushNamed(
-                   '/Result',
+                   '/ProcessResult',
                    arguments: RouteArgument(
-                    id:transcriptionResult,
-                    heroTag: translationResult,
-                    param: selectedFile!.name
+                       id: transcriptionResult!,
+                       heroTag: translationResult,
+                       param: videoTitle, // Use title from /info or default
                    ),
                );
            }
@@ -230,14 +303,13 @@ class HomeController {
               );
           }
       } finally {
-          isLoading = false; // Use YouTube-specific loading state
-          yt.close(); // Close the YouTubeExplode client
+          isLoading = false;
           onStateChange();
       }
   }
 
-
   // --- Helper: Validate YouTube URL ---
+  //not using it for now
   bool _isValidYouTubeUrl(String url) {
     if (url.isEmpty) return false;
 
@@ -328,102 +400,93 @@ class HomeController {
 
   // Call the /api/transcribe endpoint
   Future<String> _transcribeFile(Uint8List fileBytes, String filename) async {
-    final url = Uri.parse("$_apiBaseUrl/api/transcribe");
-    print("Calling Transcription API: $url");
+     // IMPORTANT: Ensure this uses _mainApiBaseUrl
+     final url = Uri.parse("$_apiBaseUrl/api/transcribe");
+     print("Calling MAIN Transcription API: $url for file: $filename");
 
-    var request = http.MultipartRequest('POST', url);
-    request.files.add(
-      http.MultipartFile.fromBytes(
-        'file', // MUST match the FastAPI parameter name ('file')
-        fileBytes,
-        filename: filename,
-        // Try to guess content type for video
-        contentType: MediaType('video', filename.split('.').last),
-      ),
-    );
+     var request = http.MultipartRequest('POST', url);
+     String? mimeType = _getMimeType(filename) ?? 'application/octet-stream'; // Guess MIME or use default
+     MediaType? contentType;
+     final typeParts = mimeType.split('/');
+     if (typeParts.length == 2) contentType = MediaType(typeParts[0], typeParts[1]);
 
-    try {
-      final response = await request.send().timeout(const Duration(minutes: 5)); // Add timeout
+     print("Uploading with Content-Type: ${contentType?.mimeType ?? 'unknown'}");
 
-      final responseBody = await response.stream.bytesToString();
-      print("Transcription Response Status: ${response.statusCode}");
-      // print("Transcription Response Body: $responseBody"); // Debugging
-
-      if (response.statusCode == 200) {
-        final decoded = jsonDecode(responseBody);
-        if (decoded.containsKey('transcription')) {
-          return decoded['transcription'] as String;
-        } else {
-          throw Exception("Transcription successful but key 'transcription' missing in response.");
-        }
-      } else {
-        // Try to parse error detail from backend
-        String detail = "Unknown error occurred (Status ${response.statusCode})";
-        try {
-           final decodedError = jsonDecode(responseBody);
-           if (decodedError is Map && decodedError.containsKey('detail')) {
-             detail = decodedError['detail'];
-           } else {
-             detail = responseBody; // Use raw body if no detail key
-           }
-        } catch (_) {
-           detail = responseBody; // Use raw body if JSON parsing fails
-        }
-        throw Exception("Transcription failed: $detail");
-      }
-    } on TimeoutException {
-        throw Exception("Transcription request timed out. The video might be too long or the server is busy.");
-    } catch (e) {
-       print("HTTP Transcribe Error: $e");
-       throw Exception("Failed to connect or transcribe: ${e.toString()}"); // Rethrow or refine
-    }
+     request.files.add(
+       http.MultipartFile.fromBytes(
+         'file', fileBytes, filename: filename, contentType: contentType,
+       ),
+     );
+     // ... rest of the existing _transcribeFile logic (error handling, parsing) ...
+     try {
+       final response = await request.send().timeout(const Duration(minutes: 5));
+       final responseBody = await response.stream.bytesToString();
+       print("Main Transcription API Response Status: ${response.statusCode}");
+       if (response.statusCode == 200) {
+         final decoded = jsonDecode(responseBody);
+         if (decoded.containsKey('transcription')) return decoded['transcription'] as String;
+         throw Exception("Key 'transcription' missing in response.");
+       } else {
+         String detail = _parseErrorDetail(responseBody, response.statusCode);
+         throw Exception("Transcription failed: $detail");
+       }
+     } on TimeoutException { throw Exception("Transcription request timed out."); }
+     catch (e) { throw Exception("Failed to connect or transcribe: ${e.toString()}"); }
   }
 
-  // Call the /api/translate endpoint
+  // _translateText: Calls YOUR MAIN BACKEND (/api/translate)
   Future<String> _translateText(String text, String targetLanguage) async {
-    final url = Uri.parse("$_apiBaseUrl/api/translate");
-    print("Calling Translation API: $url");
-
-    try {
-      final response = await http.post(
-        url,
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'text': text,
-          'target_language': targetLanguage,
-        }),
-      ).timeout(const Duration(seconds: 90)); // Add timeout
-
-      print("Translation Response Status: ${response.statusCode}");
-      // print("Translation Response Body: ${response.body}"); // Debugging
-
-      if (response.statusCode == 200) {
-        final decoded = jsonDecode(response.body);
-        if (decoded.containsKey('translated_text')) {
-          return decoded['translated_text'] as String;
-        } else {
-          throw Exception("Translation successful but key 'translated_text' missing in response.");
-        }
-      } else {
-         // Try to parse error detail from backend
-        String detail = "Unknown error occurred (Status ${response.statusCode})";
-         try {
-           final decodedError = jsonDecode(response.body);
-           if (decodedError is Map && decodedError.containsKey('detail')) {
-             detail = decodedError['detail'];
-           } else {
-             detail = response.body;
-           }
-        } catch (_) {
-            detail = response.body;
-        }
-        throw Exception("Translation failed: $detail");
-      }
-     } on TimeoutException {
-        throw Exception("Translation request timed out.");
-    } catch (e) {
-      print("HTTP Translate Error: $e");
-      throw Exception("Failed to connect or translate: ${e.toString()}");
-    }
+     // IMPORTANT: Ensure this uses _mainApiBaseUrl
+     final url = Uri.parse("$_apiBaseUrl/api/translate");
+     print("Calling MAIN Translation API: $url");
+     // ... rest of the existing _translateText logic ...
+      try {
+       final response = await http.post( url, headers: {'Content-Type': 'application/json'},
+         body: jsonEncode({'text': text, 'target_language': targetLanguage,}),
+       ).timeout(const Duration(seconds: 90));
+       print("Main Translation API Response Status: ${response.statusCode}");
+       if (response.statusCode == 200) {
+         final decoded = jsonDecode(response.body);
+         if (decoded.containsKey('translated_text')) return decoded['translated_text'] as String;
+         throw Exception("Key 'translated_text' missing in response.");
+       } else {
+         String detail = _parseErrorDetail(response.body, response.statusCode);
+         throw Exception("Translation failed: $detail");
+       }
+      } on TimeoutException { throw Exception("Translation request timed out."); }
+      catch (e) { throw Exception("Failed to connect or translate: ${e.toString()}"); }
   }
+
+  // _parseErrorDetail: Helper for parsing errors from EITHER backend
+  String _parseErrorDetail(String responseBody, int statusCode) {
+       try {
+          final decodedError = jsonDecode(responseBody);
+          if (decodedError is Map && decodedError.containsKey('detail')) {
+            return decodedError['detail']; // FastAPI/Python style
+          } else if (decodedError is String) {
+             return decodedError; // Node API might just send string error
+          }
+          // Fallback if JSON parsing works but structure is wrong
+          return responseBody.isNotEmpty ? responseBody : "Status code: $statusCode";
+       } catch (_) {
+          // Fallback if response body isn't JSON
+          return responseBody.isNotEmpty ? responseBody : "Status code: $statusCode";
+       }
+  }
+
+   // _getMimeType: Helper to guess MIME type (add mp3)
+   String? _getMimeType(String filename) {
+     final extension = filename.split('.').last.toLowerCase();
+     switch (extension) {
+       case 'mp4': return 'video/mp4';
+       case 'mov': return 'video/quicktime';
+       case 'avi': return 'video/x-msvideo';
+       case 'webm': return 'video/webm';
+       case 'm4a': return 'audio/mp4';
+       case 'mp3': return 'audio/mpeg'; // Added MP3
+       case 'wav': return 'audio/wav';
+       case 'ogg': return 'audio/ogg';
+       default: return null;
+     }
+   }
 }
